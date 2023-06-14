@@ -51,40 +51,8 @@ public final class MediaView: UIView {
     }()
     private var playerLooper: AVPlayerLooper?
 
-    private(set) lazy var playbackImageView: UIView = {
-        let wrapper = UIView()
-
-        let imageView = UIImageView()
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.image = UIImage(systemName: "play.circle.fill")
-        imageView.tintColor = Asset.Colors.Label.primary.color
-        wrapper.addSubview(imageView)
-        imageView.pinToParent(padding: .init(top: 8, left: 8, bottom: 8, right: 8))
-        wrapper.backgroundColor = Asset.Theme.Mastodon.systemBackground.color.withAlphaComponent(0.8)
-        wrapper.applyCornerRadius(radius: 8)
-
-        return wrapper
-    }()
-    
-    private(set) lazy var indicatorBlurEffectView: UIVisualEffectView = {
-        let effectView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
-        effectView.layer.masksToBounds = true
-        effectView.layer.cornerCurve = .continuous
-        effectView.layer.cornerRadius = 4
-        return effectView
-    }()
-    private(set) lazy var indicatorVibrancyEffectView = UIVisualEffectView(
-        effect: UIVibrancyEffect(blurEffect: UIBlurEffect(style: .systemUltraThinMaterial))
-    )
-    private(set) lazy var playerIndicatorLabel: UILabel = {
-        let label = UILabel()
-        label.font = .preferredFont(forTextStyle: .caption1)
-        label.textColor = .secondaryLabel
-        return label
-    }()
-    
-    let altViewController: UIHostingController<MediaAltTextOverlay> = {
-        let vc = UIHostingController(rootView: MediaAltTextOverlay())
+    let overlayViewController: UIHostingController<InlineMediaOverlayContainer> = {
+        let vc = UIHostingController(rootView: InlineMediaOverlayContainer())
         vc.view.backgroundColor = .clear
         return vc
     }()
@@ -129,14 +97,17 @@ extension MediaView {
         switch configuration.info {
         case .image(let info):
             layoutImage()
+            overlayViewController.rootView.mediaType = .image
             bindImage(configuration: configuration, info: info)
             accessibilityHint = L10n.Common.Controls.Status.Media.expandImageHint
         case .gif(let info):
             layoutGIF()
+            overlayViewController.rootView.mediaType = .gif
             bindGIF(configuration: configuration, info: info)
             accessibilityHint = L10n.Common.Controls.Status.Media.expandGifHint
         case .video(let info):
             layoutVideo()
+            overlayViewController.rootView.mediaType = .video
             bindVideo(configuration: configuration, info: info)
             accessibilityHint = L10n.Common.Controls.Status.Media.expandVideoHint
         }
@@ -179,14 +150,14 @@ extension MediaView {
         playerViewController.view.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(playerViewController.view)
         playerViewController.view.pinToParent()
-        
-        setupIndicatorViewHierarchy()
-        playerIndicatorLabel.attributedText = NSAttributedString(string: "GIF")
-        
+
         layoutAlt()
     }
     
     private func bindGIF(configuration: Configuration, info: Configuration.VideoInfo) {
+        overlayViewController.rootView.mediaDuration = info.durationMS.map { Double($0) / 1000 }
+        overlayViewController.rootView.showDuration = false
+
         guard let player = setupGIFPlayer(info: info) else { return }
         setupPlayerLooper(player: player)
         playerViewController.player = player
@@ -200,18 +171,12 @@ extension MediaView {
     
     private func layoutVideo() {
         layoutImage()
-        
-        playbackImageView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(playbackImageView)
-        NSLayoutConstraint.activate([
-            playbackImageView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            playbackImageView.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            playbackImageView.widthAnchor.constraint(equalToConstant: 88).priority(.required - 1),
-            playbackImageView.heightAnchor.constraint(equalToConstant: 88).priority(.required - 1),
-        ])
     }
     
     private func bindVideo(configuration: Configuration, info: Configuration.VideoInfo) {
+        overlayViewController.rootView.mediaDuration = info.durationMS.map { Double($0) / 1000 }
+        overlayViewController.rootView.showDuration = true
+
         let imageInfo = Configuration.ImageInfo(
             aspectRadio: info.aspectRadio,
             assetURL: info.previewURL,
@@ -231,7 +196,7 @@ extension MediaView {
             accessibilityLabel = altDescription
         }
 
-        altViewController.rootView.altDescription = altDescription
+        overlayViewController.rootView.altDescription = altDescription
     }
 
     private func layoutBlurhash() {
@@ -263,9 +228,9 @@ extension MediaView {
     }
     
     private func layoutAlt() {
-        altViewController.view.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(altViewController.view)
-        altViewController.view.pinToParent()
+        overlayViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(overlayViewController.view)
+        overlayViewController.view.pinToParent()
     }
     
     public func prepareForReuse() {
@@ -289,21 +254,18 @@ extension MediaView {
         playerViewController.player = nil
         playerLooper = nil
         
-        playbackImageView.removeFromSuperview()
-        
         // blurhash
         blurhashImageView.removeFromSuperview()
         blurhashImageView.removeConstraints(blurhashImageView.constraints)
         blurhashImageView.image = nil
-        
-        // reset indicator
-        indicatorBlurEffectView.removeFromSuperview()
-        
+
         // reset container
         container.removeFromSuperview()
         container.removeConstraints(container.constraints)
         
-        altViewController.rootView.altDescription = nil
+        overlayViewController.rootView.altDescription = nil
+        overlayViewController.rootView.showDuration = false
+        overlayViewController.rootView.mediaDuration = nil
 
         // reset configuration
         configuration = nil
@@ -332,37 +294,5 @@ extension MediaView {
         container.translatesAutoresizingMaskIntoConstraints = false
         addSubview(container)
         container.pinToParent()
-    }
-
-    private func setupIndicatorViewHierarchy() {
-        let blurEffectView = indicatorBlurEffectView
-        let vibrancyEffectView = indicatorVibrancyEffectView
-        
-        assert(playerViewController.contentOverlayView != nil)
-        if let contentOverlayView = playerViewController.contentOverlayView {
-            blurEffectView.translatesAutoresizingMaskIntoConstraints = false
-            contentOverlayView.addSubview(indicatorBlurEffectView)
-            NSLayoutConstraint.activate([
-                contentOverlayView.trailingAnchor.constraint(equalTo: blurEffectView.trailingAnchor, constant: 16),
-                contentOverlayView.bottomAnchor.constraint(equalTo: blurEffectView.bottomAnchor, constant: 8),
-            ])
-        }
-
-        if vibrancyEffectView.superview == nil {
-            vibrancyEffectView.translatesAutoresizingMaskIntoConstraints = false
-            blurEffectView.contentView.addSubview(vibrancyEffectView)
-            vibrancyEffectView.pinToParent()
-        }
-        
-        if playerIndicatorLabel.superview == nil {
-            playerIndicatorLabel.translatesAutoresizingMaskIntoConstraints = false
-            vibrancyEffectView.contentView.addSubview(playerIndicatorLabel)
-            NSLayoutConstraint.activate([
-                playerIndicatorLabel.topAnchor.constraint(equalTo: vibrancyEffectView.contentView.topAnchor),
-                playerIndicatorLabel.leadingAnchor.constraint(equalTo: vibrancyEffectView.contentView.leadingAnchor, constant: 3),
-                vibrancyEffectView.contentView.trailingAnchor.constraint(equalTo: playerIndicatorLabel.trailingAnchor, constant: 3),
-                playerIndicatorLabel.bottomAnchor.constraint(equalTo: vibrancyEffectView.contentView.bottomAnchor),
-            ])
-        }
     }
 }
